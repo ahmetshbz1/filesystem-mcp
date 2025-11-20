@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { logger } from '../logger.js';
 import { validatePath } from '../lib.js';
+import type { ToolInput, MCPResponse, HandlerFunction } from './types.js';
 
 const execAsync = promisify(exec);
 
@@ -27,8 +28,6 @@ const GitArgsSchema = z.object({
   lineEnd: z.number().optional()
 });
 
-type ToolInput = any;
-
 async function runGitCommand(cwd: string, command: string): Promise<string> {
   try {
     const { stdout, stderr } = await execAsync(command, { cwd, maxBuffer: 10 * 1024 * 1024 });
@@ -46,8 +45,8 @@ export const tools = [{
   inputSchema: zodToJsonSchema(GitArgsSchema) as ToolInput
 }];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async git(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async git(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = GitArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error(`Invalid arguments: ${parsed.error}`);
     const validPath = await validatePath(parsed.data.path);
@@ -64,14 +63,16 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleStatus(cwd: string, data: any): Promise<any> {
+type GitArgs = z.infer<typeof GitArgsSchema>;
+
+async function handleStatus(cwd: string, data: GitArgs): Promise<MCPResponse> {
   const flags = data.short ? '--short --branch' : '';
   const output = await runGitCommand(cwd, `git status ${flags}`);
   return { content: [{ type: 'text', text: output || 'No git status output' }] };
 }
 
-async function handleLog(cwd: string, data: any): Promise<any> {
-  const flags = [];
+async function handleLog(cwd: string, data: GitArgs): Promise<MCPResponse> {
+  const flags: string[] = [];
   if (data.oneline) flags.push('--oneline');
   if (data.graph) flags.push('--graph');
   if (data.author) flags.push(`--author="${data.author}"`);
@@ -81,14 +82,14 @@ async function handleLog(cwd: string, data: any): Promise<any> {
   return { content: [{ type: 'text', text: output || 'No commits found' }] };
 }
 
-async function handleDiff(cwd: string, data: any): Promise<any> {
+async function handleDiff(cwd: string, data: GitArgs): Promise<MCPResponse> {
   const stagedFlag = data.staged ? '--staged' : '';
   const fileArg = data.file ? `-- ${data.file}` : '';
   const output = await runGitCommand(cwd, `git diff ${stagedFlag} --unified=${data.unified} ${fileArg}`);
   return { content: [{ type: 'text', text: output || 'No changes to show' }] };
 }
 
-async function handleBranch(cwd: string, data: any): Promise<any> {
+async function handleBranch(cwd: string, data: GitArgs): Promise<MCPResponse> {
   let flags = '-v';
   if (data.all) flags = '-a -v';
   else if (data.remote) flags = '-r -v';
@@ -96,13 +97,13 @@ async function handleBranch(cwd: string, data: any): Promise<any> {
   return { content: [{ type: 'text', text: output || 'No branches found' }] };
 }
 
-async function handleShow(cwd: string, data: any): Promise<any> {
+async function handleShow(cwd: string, data: GitArgs): Promise<MCPResponse> {
   const flags = data.stat ? '--stat' : '';
   const output = await runGitCommand(cwd, `git show ${flags} ${data.commit}`);
   return { content: [{ type: 'text', text: output || 'No commit details found' }] };
 }
 
-async function handleBlame(data: any): Promise<any> {
+async function handleBlame(data: GitArgs): Promise<MCPResponse> {
   if (!data.file) throw new Error('file is required for blame command');
   const validPath = await validatePath(data.file);
   const lineRange = (data.lineStart && data.lineEnd) ? `-L ${data.lineStart},${data.lineEnd}` : '';

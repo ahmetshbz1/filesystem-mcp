@@ -3,6 +3,7 @@ import path from 'path';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath, applyFileEdits, FileEdit } from '../lib.js';
+import type { ToolInput, MCPResponse, HandlerFunction } from './types.js';
 
 const FileArgsSchema = z.object({
   operation: z.enum(['edit', 'mkdir', 'move', 'copy', 'delete']).describe('File operation type'),
@@ -23,7 +24,7 @@ const FileArgsSchema = z.object({
   permissions: z.number().optional().describe('Directory permissions')
 });
 
-type ToolInput = any;
+type FileArgs = z.infer<typeof FileArgsSchema>;
 
 async function copyRecursive(source: string, destination: string, preserveTimestamps: boolean): Promise<void> {
   const stats = await fs.stat(source);
@@ -71,8 +72,8 @@ export const tools = [
   }
 ];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async file(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async file(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = FileArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error(`Invalid arguments for file: ${parsed.error}`);
 
@@ -95,7 +96,7 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleEdit(data: z.infer<typeof FileArgsSchema>): Promise<any> {
+async function handleEdit(data: FileArgs): Promise<MCPResponse> {
   if (!data.path) throw new Error('path is required for edit operation');
   if (!data.edits || data.edits.length === 0) throw new Error('edits array is required for edit operation');
 
@@ -113,7 +114,7 @@ async function handleEdit(data: z.infer<typeof FileArgsSchema>): Promise<any> {
   return { content: [{ type: 'text', text: message }] };
 }
 
-async function handleMkdir(data: z.infer<typeof FileArgsSchema>): Promise<any> {
+async function handleMkdir(data: FileArgs): Promise<MCPResponse> {
   if (!data.path) throw new Error('path is required for mkdir operation');
 
   const validPath = await validatePath(data.path);
@@ -126,7 +127,7 @@ async function handleMkdir(data: z.infer<typeof FileArgsSchema>): Promise<any> {
   return { content: [{ type: 'text', text: `Successfully created directory ${data.path}` }] };
 }
 
-async function handleMove(data: z.infer<typeof FileArgsSchema>): Promise<any> {
+async function handleMove(data: FileArgs): Promise<MCPResponse> {
   if (!data.source) throw new Error('source is required for move operation');
   if (!data.destination) throw new Error('destination is required for move operation');
 
@@ -146,7 +147,7 @@ async function handleMove(data: z.infer<typeof FileArgsSchema>): Promise<any> {
   return { content: [{ type: 'text', text: `Successfully moved ${data.source} to ${data.destination}` }] };
 }
 
-async function handleCopy(data: z.infer<typeof FileArgsSchema>): Promise<any> {
+async function handleCopy(data: FileArgs): Promise<MCPResponse> {
   if (!data.source) throw new Error('source is required for copy operation');
   if (!data.destination) throw new Error('destination is required for copy operation');
 
@@ -177,7 +178,7 @@ async function handleCopy(data: z.infer<typeof FileArgsSchema>): Promise<any> {
   return { content: [{ type: 'text', text: `Successfully copied ${data.source} to ${data.destination}` }] };
 }
 
-async function handleDelete(data: z.infer<typeof FileArgsSchema>): Promise<any> {
+async function handleDelete(data: FileArgs): Promise<MCPResponse> {
   if (!data.path) throw new Error('path is required for delete operation');
 
   const validPath = await validatePath(data.path);

@@ -7,6 +7,7 @@ import { createHash } from 'crypto';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath } from '../lib.js';
+import type { ToolInput, MCPResponse, HandlerFunction } from './types.js';
 
 const UtilityArgsSchema = z.object({
   operation: z.enum([
@@ -33,7 +34,7 @@ const UtilityArgsSchema = z.object({
   strategy: z.enum(['shallow', 'deep']).optional().default('deep')
 });
 
-type ToolInput = any;
+type UtilityArgs = z.infer<typeof UtilityArgsSchema>;
 
 export const tools = [{
   name: 'utility',
@@ -41,8 +42,8 @@ export const tools = [{
   inputSchema: zodToJsonSchema(UtilityArgsSchema) as ToolInput
 }];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async utility(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async utility(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = UtilityArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error("Invalid arguments: " + parsed.error);
 
@@ -55,7 +56,7 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleBackup(data: any): Promise<any> {
+async function handleBackup(data: UtilityArgs): Promise<MCPResponse> {
   const op = data.operation.replace('backup-', '');
 
   if (op === 'create') {
@@ -105,7 +106,7 @@ async function handleBackup(data: any): Promise<any> {
   throw new Error('Invalid backup operation');
 }
 
-async function handleCompression(data: any): Promise<any> {
+async function handleCompression(data: UtilityArgs): Promise<MCPResponse> {
   if (!data.path) throw new Error('path required');
   const validPath = await validatePath(data.path);
 
@@ -143,7 +144,7 @@ async function handleCompression(data: any): Promise<any> {
   throw new Error('Invalid compression operation');
 }
 
-async function handleHash(data: any): Promise<any> {
+async function handleHash(data: UtilityArgs): Promise<MCPResponse> {
   const op = data.operation;
 
   if (op === 'hash') {
@@ -200,7 +201,7 @@ async function hashDirectory(dirPath: string, algorithm: string, results: string
   }
 }
 
-async function handleMerge(data: any): Promise<any> {
+async function handleMerge(data: UtilityArgs): Promise<MCPResponse> {
   const op = data.operation;
 
   if (op === 'merge-text') {
@@ -229,7 +230,7 @@ async function handleMerge(data: any): Promise<any> {
       return JSON.parse(content);
     }));
 
-    let merged: any = {};
+    let merged: Record<string, unknown> = {};
     if (data.strategy === 'shallow') {
       for (const obj of objects) merged = { ...merged, ...obj };
     } else {
@@ -244,12 +245,12 @@ async function handleMerge(data: any): Promise<any> {
   throw new Error('Invalid merge operation');
 }
 
-function deepMerge(...objects: any[]): any {
-  const result: any = {};
+function deepMerge(...objects: Record<string, unknown>[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
   for (const obj of objects) {
     for (const key in obj) {
       if (obj[key] && typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
-        result[key] = deepMerge(result[key] || {}, obj[key]);
+        result[key] = deepMerge(result[key] as Record<string, unknown> || {}, obj[key] as Record<string, unknown>);
       } else {
         result[key] = obj[key];
       }

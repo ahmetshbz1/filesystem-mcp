@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath, formatSize } from '../lib.js';
 import { minimatch } from 'minimatch';
+import type { ToolInput, MCPResponse, HandlerFunction, FileEntryWithStats } from './types.js';
+import type { Dirent } from 'fs';
 
 const ListArgsSchema = z.object({
   path: z.string(),
@@ -21,7 +23,7 @@ const ListArgsSchema = z.object({
   includeStats: z.boolean().optional().default(false)
 });
 
-type ToolInput = any;
+type ListArgs = z.infer<typeof ListArgsSchema>;
 
 function formatPermissions(mode: number): string {
   const perms = [
@@ -38,8 +40,8 @@ export const tools = [{
   inputSchema: zodToJsonSchema(ListArgsSchema) as ToolInput
 }];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async list(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async list(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = ListArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error(`Invalid arguments: ${parsed.error}`);
     const validPath = await validatePath(parsed.data.path);
@@ -54,31 +56,31 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleSimpleList(validPath: string, data: any): Promise<any> {
+async function handleSimpleList(validPath: string, data: ListArgs): Promise<MCPResponse> {
   let entries = await fs.readdir(validPath, { withFileTypes: true });
-  if (!data.includeHidden) entries = entries.filter((e: any) => !e.name.startsWith('.'));
-  if (data.pattern) entries = entries.filter((e: any) => minimatch(e.name, data.pattern));
+  if (!data.includeHidden) entries = entries.filter((e: Dirent) => !e.name.startsWith('.'));
+  if (data.pattern) entries = entries.filter((e: Dirent) => minimatch(e.name, data.pattern || ''));
 
   const startIdx = (data.page - 1) * data.pageSize;
   const paginatedEntries = entries.slice(startIdx, startIdx + data.pageSize);
-  const formatted = paginatedEntries.map((e: any) =>
+  const formatted = paginatedEntries.map((e: Dirent) =>
     `${e.isDirectory() ? '[DIR] ' : '[FILE]'} ${e.name}`
   ).join('\n');
 
   return { content: [{ type: 'text', text: `${formatted}\n\nPage ${data.page}/${Math.ceil(entries.length / data.pageSize)} | Total entries: ${entries.length}` }] };
 }
 
-async function handleDetailedList(validPath: string, data: any): Promise<any> {
+async function handleDetailedList(validPath: string, data: ListArgs): Promise<MCPResponse> {
   let entries = await fs.readdir(validPath, { withFileTypes: true });
-  if (!data.includeHidden) entries = entries.filter((e: any) => !e.name.startsWith('.'));
-  if (data.pattern) entries = entries.filter((e: any) => minimatch(e.name, data.pattern));
+  if (!data.includeHidden) entries = entries.filter((e: Dirent) => !e.name.startsWith('.'));
+  if (data.pattern) entries = entries.filter((e: Dirent) => minimatch(e.name, data.pattern || ''));
 
-  const entriesWithStats = await Promise.all(entries.map(async (e: any) => {
+  const entriesWithStats = await Promise.all(entries.map(async (e: Dirent) => {
     const stats = await fs.stat(path.join(validPath, e.name));
     return { entry: e, stats };
   }));
 
-  entriesWithStats.sort((a: any, b: any) => {
+  entriesWithStats.sort((a, b) => {
     const key = data.sortBy || 'name';
     if (key === 'name') return a.entry.name.localeCompare(b.entry.name);
     if (key === 'size') return b.stats.size - a.stats.size;
@@ -86,7 +88,7 @@ async function handleDetailedList(validPath: string, data: any): Promise<any> {
     return 0;
   });
 
-  const formatted = entriesWithStats.map(({ entry, stats }: any) => {
+  const formatted = entriesWithStats.map(({ entry, stats }) => {
     let line = data.includePermissions ? `${formatPermissions(stats.mode)} ` : '';
     line += `${entry.isDirectory() ? '[DIR] ' : '[FILE]'} `;
     line += `${formatSize(stats.size).padStart(10)} ${entry.name}`;
@@ -96,7 +98,7 @@ async function handleDetailedList(validPath: string, data: any): Promise<any> {
   return { content: [{ type: 'text', text: formatted }] };
 }
 
-async function handleTreeList(validPath: string, data: any, depth = 0): Promise<any> {
+async function handleTreeList(validPath: string, data: ListArgs, depth = 0): Promise<MCPResponse> {
   const indent = '  '.repeat(depth);
   let result = '';
 
@@ -123,7 +125,7 @@ async function handleTreeList(validPath: string, data: any, depth = 0): Promise<
   return { content: [{ type: 'text', text: result }] };
 }
 
-async function handleRecursiveList(validPath: string, data: any, results: string[] = [], depth = 0): Promise<any> {
+async function handleRecursiveList(validPath: string, data: ListArgs, results: string[] = [], depth = 0): Promise<MCPResponse> {
   if (data.maxDepth && depth >= data.maxDepth) {
     return { content: [{ type: 'text', text: results.join('\n') }] };
   }

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath } from '../lib.js';
 import { minimatch } from 'minimatch';
+import type { ToolInput, MCPResponse, HandlerFunction } from './types.js';
 
 const SearchArgsSchema = z.object({
   path: z.string(),
@@ -21,7 +22,7 @@ const SearchArgsSchema = z.object({
   threshold: z.number().min(0).max(1).optional().default(0.6)
 });
 
-type ToolInput = any;
+type SearchArgs = z.infer<typeof SearchArgsSchema>;
 
 function levenshteinDistance(a: string, b: string): number {
   const matrix: number[][] = [];
@@ -51,8 +52,8 @@ export const tools = [{
   inputSchema: zodToJsonSchema(SearchArgsSchema) as ToolInput
 }];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async search(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async search(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = SearchArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error("Invalid arguments: " + parsed.error);
     const validPath = await validatePath(parsed.data.path);
@@ -66,7 +67,7 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleFileSearch(validPath: string, data: any, results: string[] = [], depth = 0): Promise<any> {
+async function handleFileSearch(validPath: string, data: SearchArgs, results: string[] = [], depth = 0): Promise<MCPResponse> {
   if (data.maxDepth && depth >= data.maxDepth) return { content: [{ type: 'text', text: results.join('\n') }] };
 
   const entries = await fs.readdir(validPath, { withFileTypes: true });
@@ -87,14 +88,14 @@ async function handleFileSearch(validPath: string, data: any, results: string[] 
   return { content: [{ type: 'text', text: '' }] };
 }
 
-async function handleContentSearch(validPath: string, data: any): Promise<any> {
+async function handleContentSearch(validPath: string, data: SearchArgs): Promise<MCPResponse> {
   if (!data.query) throw new Error('query is required for content search');
   const results: string[] = [];
   await searchContent(validPath, data, results);
   return { content: [{ type: 'text', text: "Found " + results.length + " matches:\n\n" + results.slice(0, data.maxResults).join('\n\n') }] };
 }
 
-async function searchContent(dirPath: string, data: any, results: string[], depth = 0): Promise<void> {
+async function searchContent(dirPath: string, data: SearchArgs, results: string[], depth = 0): Promise<void> {
   if (data.maxDepth && depth >= data.maxDepth) return;
   if (results.length >= data.maxResults) return;
 
@@ -113,9 +114,10 @@ async function searchContent(dirPath: string, data: any, results: string[], dept
       try {
         const content = await fs.readFile(fullPath, 'utf8');
         const lines = content.split('\n');
+        const queryStr = data.query || '';
         const searchPattern = data.useRegex
-          ? new RegExp(data.query, data.caseSensitive ? 'g' : 'gi')
-          : data.caseSensitive ? data.query : data.query.toLowerCase();
+          ? new RegExp(queryStr, data.caseSensitive ? 'g' : 'gi')
+          : data.caseSensitive ? queryStr : queryStr.toLowerCase();
 
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
@@ -137,14 +139,14 @@ async function searchContent(dirPath: string, data: any, results: string[], dept
   }
 }
 
-async function handleFuzzySearch(validPath: string, data: any): Promise<any> {
+async function handleFuzzySearch(validPath: string, data: SearchArgs): Promise<MCPResponse> {
   if (!data.query) throw new Error('query is required for fuzzy search');
 
   const allFiles: Array<{ path: string; score: number }> = [];
-  await collectFiles(validPath, data.path, allFiles);
+  await collectFiles(validPath, data.path || '', allFiles);
 
   const matches = allFiles
-    .map(({ path: p }) => ({ path: p, score: similarityScore(data.query, path.basename(p)) }))
+    .map(({ path: p }) => ({ path: p, score: similarityScore(data.query || '', path.basename(p)) }))
     .filter(m => m.score >= data.threshold)
     .sort((a, b) => b.score - a.score)
     .slice(0, data.maxResults);

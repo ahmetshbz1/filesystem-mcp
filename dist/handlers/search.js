@@ -110,9 +110,10 @@ async function searchContent(dirPath, data, results, depth = 0) {
             try {
                 const content = await fs.readFile(fullPath, 'utf8');
                 const lines = content.split('\n');
+                const queryStr = data.query || '';
                 const searchPattern = data.useRegex
-                    ? new RegExp(data.query, data.caseSensitive ? 'g' : 'gi')
-                    : data.caseSensitive ? data.query : data.query.toLowerCase();
+                    ? new RegExp(queryStr, data.caseSensitive ? 'g' : 'gi')
+                    : data.caseSensitive ? queryStr : queryStr.toLowerCase();
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i];
                     const testLine = data.caseSensitive ? line : line.toLowerCase();
@@ -137,9 +138,9 @@ async function handleFuzzySearch(validPath, data) {
     if (!data.query)
         throw new Error('query is required for fuzzy search');
     const allFiles = [];
-    await collectFiles(validPath, data.path, allFiles);
+    await collectFiles(validPath, data.path || '', allFiles);
     const matches = allFiles
-        .map(({ path: p }) => ({ path: p, score: similarityScore(data.query, path.basename(p)) }))
+        .map(({ path: p }) => ({ path: p, score: similarityScore(data.query || '', path.basename(p)) }))
         .filter(m => m.score >= data.threshold)
         .sort((a, b) => b.score - a.score)
         .slice(0, data.maxResults);

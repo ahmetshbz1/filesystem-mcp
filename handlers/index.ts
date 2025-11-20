@@ -4,6 +4,7 @@ import type { Root } from '@modelcontextprotocol/sdk/types.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, RootsListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { setAllowedDirectories } from '../lib.js';
 import { getValidRootDirectories } from '../roots-utils.js';
+import type { HandlerFunction } from './types.js';
 import * as read from './read.js';
 import * as write from './write.js';
 import * as file from './file.js';
@@ -22,7 +23,7 @@ export function installHandlers(server: Server, allowedDirectories: string[]) {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: allTools }));
 
-  const handlerMap: Record<string, Function> = {
+  const handlerMap: Record<string, HandlerFunction> = {
     ...read.handlers,
     ...write.handlers,
     ...file.handlers,
@@ -41,7 +42,8 @@ export function installHandlers(server: Server, allowedDirectories: string[]) {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
-      const { name, arguments: args } = request.params as any;
+      const params = request.params as { name: string; arguments?: Record<string, unknown> };
+      const { name, arguments: args = {} } = params;
       const now = Date.now();
 
       // Rate limiting
@@ -66,9 +68,8 @@ export function installHandlers(server: Server, allowedDirectories: string[]) {
 
       const fn = handlerMap[name];
       if (!fn) throw new Error(`Unknown tool: ${name}`);
-      // Pass allowedDirectories to handlers that accept it as second arg
-      const result = await fn(args, allowedDirectories);
-      return result;
+      const result = await fn(args);
+      return result as { content: Array<{ type: string; text?: string }>; isError?: boolean };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       return { content: [{ type: 'text', text: `Error: ${errorMessage}` }], isError: true };

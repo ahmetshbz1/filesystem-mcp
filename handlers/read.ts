@@ -4,6 +4,7 @@ import path from 'path';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath, readFileContent, tailFile, headFile } from '../lib.js';
+import type { ToolInput, MCPResponse, HandlerFunction } from './types.js';
 
 const ReadArgsSchema = z.object({
   path: z.string().optional().describe('File path (required for single file, ignored for multiple)'),
@@ -22,7 +23,7 @@ const ReadArgsSchema = z.object({
   continueOnError: z.boolean().optional().default(true).describe('Continue on error for multiple files')
 });
 
-type ToolInput = any;
+type ReadArgs = z.infer<typeof ReadArgsSchema>;
 
 async function readFileAsBase64Stream(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -42,8 +43,8 @@ export const tools = [
   }
 ];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async read(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async read(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = ReadArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error(`Invalid arguments for read: ${parsed.error}`);
 
@@ -64,7 +65,7 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleTextRead(data: z.infer<typeof ReadArgsSchema>): Promise<any> {
+async function handleTextRead(data: ReadArgs): Promise<MCPResponse> {
   if (!data.path) throw new Error('path is required for text read');
   const validPath = await validatePath(data.path);
 
@@ -121,7 +122,7 @@ async function handleTextRead(data: z.infer<typeof ReadArgsSchema>): Promise<any
   return { content: [{ type: 'text', text: content }] };
 }
 
-async function handleBinaryRead(data: z.infer<typeof ReadArgsSchema>): Promise<any> {
+async function handleBinaryRead(data: ReadArgs): Promise<MCPResponse> {
   if (!data.path) throw new Error('path is required for binary read');
   const validPath = await validatePath(data.path);
   const stats = await fs.stat(validPath);
@@ -139,7 +140,7 @@ async function handleBinaryRead(data: z.infer<typeof ReadArgsSchema>): Promise<a
   };
 }
 
-async function handleMediaRead(data: z.infer<typeof ReadArgsSchema>): Promise<any> {
+async function handleMediaRead(data: ReadArgs): Promise<MCPResponse> {
   if (!data.path) throw new Error('path is required for media read');
   const validPath = await validatePath(data.path);
   const stats = await fs.stat(validPath);
@@ -175,7 +176,7 @@ async function handleMediaRead(data: z.infer<typeof ReadArgsSchema>): Promise<an
   }
 }
 
-async function handleMultipleRead(data: z.infer<typeof ReadArgsSchema>): Promise<any> {
+async function handleMultipleRead(data: ReadArgs): Promise<MCPResponse> {
   if (!data.paths || data.paths.length === 0) {
     throw new Error('paths array is required for multiple read');
   }

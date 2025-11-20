@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath } from '../lib.js';
+import type { ToolInput, MCPResponse, HandlerFunction } from './types.js';
 
 const WriteArgsSchema = z.object({
   path: z.string().optional().describe('File path (for single write)'),
@@ -21,7 +22,7 @@ const WriteArgsSchema = z.object({
   permissions: z.number().optional().describe('File permissions (e.g., 0o644)')
 });
 
-type ToolInput = any;
+type WriteArgs = z.infer<typeof WriteArgsSchema>;
 
 async function atomicWrite(filePath: string, content: string, encoding: BufferEncoding): Promise<void> {
   const tempPath = `${filePath}.tmp.${Date.now()}`;
@@ -56,8 +57,8 @@ export const tools = [
   }
 ];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async write(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async write(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = WriteArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error(`Invalid arguments for write: ${parsed.error}`);
 
@@ -76,7 +77,7 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleSingleWrite(data: z.infer<typeof WriteArgsSchema>): Promise<any> {
+async function handleSingleWrite(data: WriteArgs): Promise<MCPResponse> {
   if (!data.path) throw new Error('path is required for single write');
   if (data.content === undefined) throw new Error('content is required for single write');
 
@@ -103,7 +104,7 @@ async function handleSingleWrite(data: z.infer<typeof WriteArgsSchema>): Promise
   return { content: [{ type: 'text', text: message }] };
 }
 
-async function handleBatchWrite(data: z.infer<typeof WriteArgsSchema>): Promise<any> {
+async function handleBatchWrite(data: WriteArgs): Promise<MCPResponse> {
   if (!data.operations || data.operations.length === 0) {
     throw new Error('operations array is required for batch write');
   }
@@ -132,7 +133,7 @@ async function handleBatchWrite(data: z.infer<typeof WriteArgsSchema>): Promise<
   return { content: [{ type: 'text', text: message }] };
 }
 
-async function handleTemplateWrite(data: z.infer<typeof WriteArgsSchema>): Promise<any> {
+async function handleTemplateWrite(data: WriteArgs): Promise<MCPResponse> {
   if (!data.path) throw new Error('path is required for template write');
   if (!data.template) throw new Error('template is required for template write');
   if (!data.variables) throw new Error('variables are required for template write');

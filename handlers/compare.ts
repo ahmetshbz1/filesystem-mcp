@@ -3,6 +3,7 @@ import path from 'path';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath, createUnifiedDiff } from '../lib.js';
+import type { ToolInput, MCPResponse, HandlerFunction } from './types.js';
 
 const CompareArgsSchema = z.object({
   type: z.enum(['text', 'binary', 'directory']).default('text'),
@@ -14,7 +15,7 @@ const CompareArgsSchema = z.object({
   compareContent: z.boolean().optional().default(false)
 });
 
-type ToolInput = any;
+type CompareArgs = z.infer<typeof CompareArgsSchema>;
 
 export const tools = [{
   name: 'compare',
@@ -22,8 +23,8 @@ export const tools = [{
   inputSchema: zodToJsonSchema(CompareArgsSchema) as ToolInput
 }];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async compare(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async compare(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = CompareArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error("Invalid arguments: " + parsed.error);
     const validPath1 = await validatePath(parsed.data.path1);
@@ -38,7 +39,7 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleTextCompare(path1: string, path2: string, data: any): Promise<any> {
+async function handleTextCompare(path1: string, path2: string, data: CompareArgs): Promise<MCPResponse> {
   const [content1, content2] = await Promise.all([
     fs.readFile(path1, 'utf8'),
     fs.readFile(path2, 'utf8')
@@ -48,7 +49,7 @@ async function handleTextCompare(path1: string, path2: string, data: any): Promi
   return { content: [{ type: 'text', text: diff || 'Files are identical' }] };
 }
 
-async function handleBinaryCompare(path1: string, path2: string): Promise<any> {
+async function handleBinaryCompare(path1: string, path2: string): Promise<MCPResponse> {
   const [buffer1, buffer2] = await Promise.all([fs.readFile(path1), fs.readFile(path2)]);
 
   if (buffer1.length !== buffer2.length) {
@@ -59,7 +60,7 @@ async function handleBinaryCompare(path1: string, path2: string): Promise<any> {
   return { content: [{ type: 'text', text: identical ? 'Files are identical' : 'Files differ' }] };
 }
 
-async function handleDirectoryCompare(dir1: string, dir2: string, data: any): Promise<any> {
+async function handleDirectoryCompare(dir1: string, dir2: string, data: CompareArgs): Promise<MCPResponse> {
   const result = await compareDirectories(dir1, dir2, data.recursive, data.compareContent);
 
   let text = 'Directory Comparison:\n\n';

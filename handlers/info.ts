@@ -3,6 +3,7 @@ import path from 'path';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath, formatSize } from '../lib.js';
+import type { ToolInput, MCPResponse, HandlerFunction } from './types.js';
 
 const InfoArgsSchema = z.object({
   path: z.string(),
@@ -14,7 +15,7 @@ const InfoArgsSchema = z.object({
   recursive: z.boolean().optional().default(true)
 });
 
-type ToolInput = any;
+type InfoArgs = z.infer<typeof InfoArgsSchema>;
 
 const MIME_TYPES: Record<string, string> = {
   '.txt': 'text/plain', '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript',
@@ -30,8 +31,8 @@ export const tools = [{
   inputSchema: zodToJsonSchema(InfoArgsSchema) as ToolInput
 }];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async info(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async info(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = InfoArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error(`Invalid arguments: ${parsed.error}`);
     const validPath = await validatePath(parsed.data.path);
@@ -46,9 +47,9 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleMetadata(validPath: string, data: any): Promise<any> {
+async function handleMetadata(validPath: string, data: InfoArgs): Promise<MCPResponse> {
   const stats = await fs.stat(validPath);
-  const info: any = {
+  const info: Record<string, unknown> = {
     path: data.path,
     type: stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other',
     size: formatSize(stats.size),
@@ -69,13 +70,13 @@ async function handleMetadata(validPath: string, data: any): Promise<any> {
   return { content: [{ type: 'text', text: JSON.stringify(info, null, 2) }] };
 }
 
-async function handleMime(validPath: string): Promise<any> {
+async function handleMime(validPath: string): Promise<MCPResponse> {
   const ext = path.extname(validPath).toLowerCase();
   const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
   return { content: [{ type: 'text', text: `MIME type: ${mimeType}` }] };
 }
 
-async function handleDiskUsage(validPath: string, data: any): Promise<any> {
+async function handleDiskUsage(validPath: string, data: InfoArgs): Promise<MCPResponse> {
   const usage = await calculateDiskUsage(validPath, data.maxDepth);
   const sorted = usage.sort((a, b) => b.size - a.size).slice(0, data.limit);
   const formatted = sorted.map(item =>
@@ -111,7 +112,7 @@ async function calculateDiskUsage(dirPath: string, maxDepth?: number, depth = 0)
   return results;
 }
 
-async function handleSymlink(validPath: string, data: any): Promise<any> {
+async function handleSymlink(validPath: string, data: InfoArgs): Promise<MCPResponse> {
   try {
     const lstat = await fs.lstat(validPath);
     if (!lstat.isSymbolicLink()) {

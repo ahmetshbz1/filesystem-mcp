@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { logger } from '../logger.js';
 import { validatePath } from '../lib.js';
+import type { ToolInput, MCPResponse, HandlerFunction } from './types.js';
 
 const execAsync = promisify(exec);
 
@@ -18,7 +19,7 @@ const ValidateArgsSchema = z.object({
   fix: z.boolean().optional().default(false)
 });
 
-type ToolInput = any;
+type ValidateArgs = z.infer<typeof ValidateArgsSchema>;
 
 interface ValidationError {
   line?: number;
@@ -42,8 +43,8 @@ export const tools = [{
   inputSchema: zodToJsonSchema(ValidateArgsSchema) as ToolInput
 }];
 
-export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async validate(args) {
+export const handlers: Record<string, HandlerFunction> = {
+  async validate(args: Record<string, unknown>): Promise<MCPResponse> {
     const parsed = ValidateArgsSchema.safeParse(args);
     if (!parsed.success) throw new Error(`Invalid arguments: ${parsed.error}`);
     const validPath = await validatePath(parsed.data.path);
@@ -56,7 +57,7 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
   }
 };
 
-async function handleSyntax(validPath: string, data: any): Promise<any> {
+async function handleSyntax(validPath: string, data: ValidateArgs): Promise<MCPResponse> {
   const lang = data.language === 'auto' ? detectLanguage(validPath) : data.language;
   const content = await fs.readFile(validPath, 'utf8');
   let errors: ValidationError[] = [];
@@ -155,7 +156,7 @@ async function validateJavaScript(filePath: string): Promise<ValidationError[]> 
   }
 }
 
-async function handleLint(validPath: string, data: any): Promise<any> {
+async function handleLint(validPath: string, data: ValidateArgs): Promise<MCPResponse> {
   const fixFlag = data.fix ? '--fix' : '';
   const configFlag = data.configPath ? `--config ${data.configPath}` : '';
 

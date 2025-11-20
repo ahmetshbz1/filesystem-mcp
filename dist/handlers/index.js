@@ -33,7 +33,8 @@ export function installHandlers(server, allowedDirectories) {
     const RATE_LIMIT_MAX = 100; // requests per window
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
         try {
-            const { name, arguments: args } = request.params;
+            const params = request.params;
+            const { name, arguments: args = {} } = params;
             const now = Date.now();
             // Rate limiting
             const key = `tool_${name}`;
@@ -59,8 +60,7 @@ export function installHandlers(server, allowedDirectories) {
             const fn = handlerMap[name];
             if (!fn)
                 throw new Error(`Unknown tool: ${name}`);
-            // Pass allowedDirectories to handlers that accept it as second arg
-            const result = await fn(args, allowedDirectories);
+            const result = await fn(args);
             return result;
         }
         catch (error) {

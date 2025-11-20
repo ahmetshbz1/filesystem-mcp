@@ -52,7 +52,7 @@ async function handleSimpleList(validPath, data) {
     if (!data.includeHidden)
         entries = entries.filter((e) => !e.name.startsWith('.'));
     if (data.pattern)
-        entries = entries.filter((e) => minimatch(e.name, data.pattern));
+        entries = entries.filter((e) => minimatch(e.name, data.pattern || ''));
     const startIdx = (data.page - 1) * data.pageSize;
     const paginatedEntries = entries.slice(startIdx, startIdx + data.pageSize);
     const formatted = paginatedEntries.map((e) => `${e.isDirectory() ? '[DIR] ' : '[FILE]'} ${e.name}`).join('\n');
@@ -63,7 +63,7 @@ async function handleDetailedList(validPath, data) {
     if (!data.includeHidden)
         entries = entries.filter((e) => !e.name.startsWith('.'));
     if (data.pattern)
-        entries = entries.filter((e) => minimatch(e.name, data.pattern));
+        entries = entries.filter((e) => minimatch(e.name, data.pattern || ''));
     const entriesWithStats = await Promise.all(entries.map(async (e) => {
         const stats = await fs.stat(path.join(validPath, e.name));
         return { entry: e, stats };
