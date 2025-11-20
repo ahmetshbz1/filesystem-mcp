@@ -6,18 +6,16 @@ import { setAllowedDirectories } from '../lib.js';
 import { getValidRootDirectories } from '../roots-utils.js';
 import * as read from './read.js';
 import * as write from './write.js';
+import * as file from './file.js';
 import * as list from './list.js';
 import * as search from './search.js';
 import * as info from './info.js';
 import * as compare from './compare.js';
-import * as backup from './backup.js';
-import * as compress from './compress.js';
-import * as hash from './hash.js';
-import * as merge from './merge.js';
+import * as utility from './utility.js';
 import * as git from './git.js';
-import * as validation from './validation.js';
+import * as validate from './validate.js';
 
-const allTools = [...read.tools, ...write.tools, ...list.tools, ...search.tools, ...info.tools, ...compare.tools, ...backup.tools, ...compress.tools, ...hash.tools, ...merge.tools, ...git.tools, ...validation.tools];
+const allTools = [...read.tools, ...write.tools, ...file.tools, ...list.tools, ...search.tools, ...info.tools, ...compare.tools, ...utility.tools, ...git.tools, ...validate.tools];
 
 export function installHandlers(server: Server, allowedDirectories: string[]) {
   setAllowedDirectories(allowedDirectories);
@@ -27,16 +25,14 @@ export function installHandlers(server: Server, allowedDirectories: string[]) {
   const handlerMap: Record<string, Function> = {
     ...read.handlers,
     ...write.handlers,
+    ...file.handlers,
     ...list.handlers,
     ...search.handlers,
     ...info.handlers,
     ...compare.handlers,
-    ...backup.handlers,
-    ...compress.handlers,
-    ...hash.handlers,
-    ...merge.handlers,
+    ...utility.handlers,
     ...git.handlers,
-    ...validation.handlers,
+    ...validate.handlers,
   };
 
   const rateLimit = new Map<string, { count: number; resetTime: number }>();

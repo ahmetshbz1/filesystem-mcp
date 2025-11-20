@@ -12,8 +12,8 @@ declare const CompressFileArgsSchema: z.ZodObject<{
 }, {
     path: string;
     level?: number | undefined;
-    outputPath?: string | undefined;
     format?: "gzip" | "brotli" | undefined;
+    outputPath?: string | undefined;
 }>;
 declare const DecompressFileArgsSchema: z.ZodObject<{
     path: z.ZodString;
@@ -21,12 +21,12 @@ declare const DecompressFileArgsSchema: z.ZodObject<{
     format: z.ZodOptional<z.ZodEnum<["gzip", "brotli"]>>;
 }, "strip", z.ZodTypeAny, {
     path: string;
-    outputPath?: string | undefined;
     format?: "gzip" | "brotli" | undefined;
+    outputPath?: string | undefined;
 }, {
     path: string;
-    outputPath?: string | undefined;
     format?: "gzip" | "brotli" | undefined;
+    outputPath?: string | undefined;
 }>;
 type ToolInput = any;
 export declare const tools: {

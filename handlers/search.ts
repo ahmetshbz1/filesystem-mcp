@@ -2,251 +2,165 @@ import fs from 'fs/promises';
 import path from 'path';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { validatePath, searchFilesWithValidation } from '../lib.js';
+import { validatePath } from '../lib.js';
+import { minimatch } from 'minimatch';
 
-const SearchFilesArgsSchema = z.object({
+const SearchArgsSchema = z.object({
   path: z.string(),
-  pattern: z.string(),
+  type: z.enum(['files', 'content', 'fuzzy']).default('files'),
+  pattern: z.string().optional(),
+  query: z.string().optional(),
   excludePatterns: z.array(z.string()).optional().default([]),
   caseSensitive: z.boolean().optional().default(false),
   maxDepth: z.number().optional(),
-  fileTypes: z.array(z.string()).optional()
-});
-
-const ContentSearchArgsSchema = z.object({
-  path: z.string(),
-  query: z.string().describe('Text to search for in file contents'),
-  useRegex: z.boolean().optional().default(false).describe('Treat query as regex'),
-  caseSensitive: z.boolean().optional().default(false),
-  filePattern: z.string().optional().describe('Filter files by glob pattern'),
-  excludePatterns: z.array(z.string()).optional().default([]),
-  maxDepth: z.number().optional(),
-  contextLines: z.number().min(0).max(10).optional().default(0).describe('Show N lines before/after match'),
-  maxResults: z.number().optional().default(100).describe('Maximum number of results')
-});
-
-const FuzzySearchArgsSchema = z.object({
-  path: z.string(),
-  query: z.string().describe('Fuzzy search query'),
-  threshold: z.number().min(0).max(1).optional().default(0.6).describe('Similarity threshold (0-1)'),
-  maxResults: z.number().optional().default(50)
+  fileTypes: z.array(z.string()).optional(),
+  useRegex: z.boolean().optional().default(false),
+  filePattern: z.string().optional(),
+  contextLines: z.number().min(0).max(10).optional().default(0),
+  maxResults: z.number().optional().default(100),
+  threshold: z.number().min(0).max(1).optional().default(0.6)
 });
 
 type ToolInput = any;
 
 function levenshteinDistance(a: string, b: string): number {
   const matrix: number[][] = [];
-
-  for (let i = 0; i <= b.length; i++) {
-    matrix[i] = [i];
-  }
-
-  for (let j = 0; j <= a.length; j++) {
-    matrix[0][j] = j;
-  }
-
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
   for (let i = 1; i <= b.length; i++) {
     for (let j = 1; j <= a.length; j++) {
       if (b.charAt(i - 1) === a.charAt(j - 1)) {
         matrix[i][j] = matrix[i - 1][j - 1];
       } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j] + 1
-        );
+        matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1);
       }
     }
   }
-
   return matrix[b.length][a.length];
 }
 
 function similarityScore(a: string, b: string): number {
   const maxLen = Math.max(a.length, b.length);
   if (maxLen === 0) return 1.0;
-  const distance = levenshteinDistance(a.toLowerCase(), b.toLowerCase());
-  return 1 - distance / maxLen;
+  return 1 - levenshteinDistance(a.toLowerCase(), b.toLowerCase()) / maxLen;
 }
 
-async function searchInFile(
-  filePath: string,
-  query: string,
-  useRegex: boolean,
-  caseSensitive: boolean,
-  contextLines: number
-): Promise<{ matches: number; lines: string[] }> {
-  try {
-    const content = await fs.readFile(filePath, 'utf8');
-    const lines = content.split('\n');
-    const matchedLines: string[] = [];
-    let matches = 0;
+export const tools = [{
+  name: 'search',
+  description: 'Unified search tool. Use type: files|content|fuzzy',
+  inputSchema: zodToJsonSchema(SearchArgsSchema) as ToolInput
+}];
 
-    const searchPattern = useRegex
-      ? new RegExp(query, caseSensitive ? 'g' : 'gi')
-      : caseSensitive
-      ? query
-      : query.toLowerCase();
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const testLine = caseSensitive ? line : line.toLowerCase();
-
-      const isMatch = useRegex
-        ? (searchPattern as RegExp).test(line)
-        : testLine.includes(searchPattern as string);
-
-      if (isMatch) {
-        matches++;
-        const start = Math.max(0, i - contextLines);
-        const end = Math.min(lines.length, i + contextLines + 1);
-
-        for (let j = start; j < end; j++) {
-          const prefix = j === i ? `${i + 1}:* ` : `${j + 1}:  `;
-          matchedLines.push(`${prefix}${lines[j]}`);
-        }
-        if (contextLines > 0) matchedLines.push('---');
-      }
-    }
-
-    return { matches, lines: matchedLines };
-  } catch {
-    return { matches: 0, lines: [] };
-  }
-}
-
-export const tools = [
-  {
-    name: 'search_files',
-    description: 'Search files by glob pattern with advanced filtering',
-    inputSchema: zodToJsonSchema(SearchFilesArgsSchema) as ToolInput
-  },
-  {
-    name: 'content_search',
-    description: 'Search within file contents with regex and context support (grep-like)',
-    inputSchema: zodToJsonSchema(ContentSearchArgsSchema) as ToolInput
-  },
-  {
-    name: 'fuzzy_search',
-    description: 'Fuzzy search for files by name similarity',
-    inputSchema: zodToJsonSchema(FuzzySearchArgsSchema) as ToolInput
-  },
-];
-
-export const handlers: Record<string, (args: any, allowedDirectories?: string[]) => Promise<any>> = {
-  async search_files(args, allowedDirectories = []) {
-    const parsed = SearchFilesArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for search_files: ${parsed.error}`);
+export const handlers: Record<string, (args: any) => Promise<any>> = {
+  async search(args) {
+    const parsed = SearchArgsSchema.safeParse(args);
+    if (!parsed.success) throw new Error("Invalid arguments: " + parsed.error);
     const validPath = await validatePath(parsed.data.path);
-    const results = await searchFilesWithValidation(validPath, parsed.data.pattern, allowedDirectories, {
-      excludePatterns: parsed.data.excludePatterns,
-      caseSensitive: parsed.data.caseSensitive,
-      maxDepth: parsed.data.maxDepth,
-      fileTypes: parsed.data.fileTypes
-    });
-    return { content: [{ type: 'text', text: results.length > 0 ? results.join('\n') : 'No matches found' }] };
-  },
 
-  async content_search(args) {
-    const parsed = ContentSearchArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for content_search: ${parsed.error}`);
-    const { path: rootPath, query, useRegex, caseSensitive, filePattern, excludePatterns, maxDepth, contextLines, maxResults } = parsed.data;
-    const validPath = await validatePath(rootPath);
-
-    const fileResults: { file: string; matches: number; lines: string[] }[] = [];
-    let totalMatches = 0;
-
-    async function searchDir(dirPath: string, depth: number = 0): Promise<void> {
-      if (maxDepth && depth >= maxDepth) return;
-      if (totalMatches >= maxResults) return;
-
-      const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
-      for (const entry of entries) {
-        if (totalMatches >= maxResults) break;
-
-        const fullPath = path.join(dirPath, entry.name);
-        const relativePath = path.relative(validPath, fullPath);
-
-        if (entry.isDirectory()) {
-          await searchDir(fullPath, depth + 1);
-          continue;
-        }
-
-        if (filePattern && !entry.name.match(filePattern)) {
-          continue;
-        }
-
-        const shouldExclude = excludePatterns.some(pattern => relativePath.includes(pattern));
-        if (shouldExclude) continue;
-
-        const result = await searchInFile(fullPath, query, useRegex, caseSensitive, contextLines);
-
-        if (result.matches > 0) {
-          fileResults.push({
-            file: relativePath,
-            matches: result.matches,
-            lines: result.lines
-          });
-          totalMatches += result.matches;
-        }
-      }
+    switch(parsed.data.type) {
+      case 'files': return handleFileSearch(validPath, parsed.data);
+      case 'content': return handleContentSearch(validPath, parsed.data);
+      case 'fuzzy': return handleFuzzySearch(validPath, parsed.data);
+      default: throw new Error('Invalid search type');
     }
-
-    await searchDir(validPath);
-
-    if (fileResults.length === 0) {
-      return { content: [{ type: 'text', text: 'No matches found' }] };
-    }
-
-    const output = fileResults.map((r) => {
-      const header = `\n=== ${r.file} (${r.matches} matches) ===`;
-      return [header, ...r.lines].join('\n');
-    });
-
-    const summary = `\n\nTotal: ${totalMatches} matches in ${fileResults.length} files`;
-    return { content: [{ type: 'text', text: output.join('\n') + summary }] };
-  },
-
-  async fuzzy_search(args) {
-    const parsed = FuzzySearchArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for fuzzy_search: ${parsed.error}`);
-    const { path: rootPath, query, threshold, maxResults } = parsed.data;
-    const validPath = await validatePath(rootPath);
-
-    const results: { path: string; score: number }[] = [];
-
-    async function traverse(dirPath: string): Promise<void> {
-      const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
-      for (const entry of entries) {
-        const fullPath = path.join(dirPath, entry.name);
-        const score = similarityScore(entry.name, query);
-
-        if (score >= threshold) {
-          const relativePath = path.relative(validPath, fullPath);
-          results.push({ path: relativePath, score });
-        }
-
-        if (entry.isDirectory()) {
-          await traverse(fullPath);
-        }
-      }
-    }
-
-    await traverse(validPath);
-
-    results.sort((a, b) => b.score - a.score);
-    const topResults = results.slice(0, maxResults);
-
-    if (topResults.length === 0) {
-      return { content: [{ type: 'text', text: 'No fuzzy matches found' }] };
-    }
-
-    const output = topResults.map((r) =>
-      `${(r.score * 100).toFixed(1)}% - ${r.path}`
-    ).join('\n');
-
-    return { content: [{ type: 'text', text: output }] };
   }
 };
+
+async function handleFileSearch(validPath: string, data: any, results: string[] = [], depth = 0): Promise<any> {
+  if (data.maxDepth && depth >= data.maxDepth) return { content: [{ type: 'text', text: results.join('\n') }] };
+
+  const entries = await fs.readdir(validPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(validPath, entry.name);
+    const relativePath = path.relative(data.path, fullPath);
+
+    if (entry.isFile()) {
+      if (data.pattern && !minimatch(entry.name, data.pattern)) continue;
+      if (data.fileTypes && !data.fileTypes.some((t: string) => entry.name.endsWith('.' + t))) continue;
+      results.push(relativePath);
+    } else if (entry.isDirectory()) {
+      await handleFileSearch(fullPath, data, results, depth + 1);
+    }
+  }
+
+  if (depth === 0) return { content: [{ type: 'text', text: "Found " + results.length + " files:\n" + results.join('\n') }] };
+  return { content: [{ type: 'text', text: '' }] };
+}
+
+async function handleContentSearch(validPath: string, data: any): Promise<any> {
+  if (!data.query) throw new Error('query is required for content search');
+  const results: string[] = [];
+  await searchContent(validPath, data, results);
+  return { content: [{ type: 'text', text: "Found " + results.length + " matches:\n\n" + results.slice(0, data.maxResults).join('\n\n') }] };
+}
+
+async function searchContent(dirPath: string, data: any, results: string[], depth = 0): Promise<void> {
+  if (data.maxDepth && depth >= data.maxDepth) return;
+  if (results.length >= data.maxResults) return;
+
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (results.length >= data.maxResults) break;
+
+    const fullPath = path.join(dirPath, entry.name);
+
+    if (entry.isDirectory()) {
+      await searchContent(fullPath, data, results, depth + 1);
+    } else if (entry.isFile()) {
+      if (data.filePattern && !minimatch(entry.name, data.filePattern)) continue;
+
+      try {
+        const content = await fs.readFile(fullPath, 'utf8');
+        const lines = content.split('\n');
+        const searchPattern = data.useRegex
+          ? new RegExp(data.query, data.caseSensitive ? 'g' : 'gi')
+          : data.caseSensitive ? data.query : data.query.toLowerCase();
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const testLine = data.caseSensitive ? line : line.toLowerCase();
+          const isMatch = data.useRegex
+            ? (searchPattern as RegExp).test(line)
+            : testLine.includes(searchPattern as string);
+
+          if (isMatch) {
+            const start = Math.max(0, i - data.contextLines);
+            const end = Math.min(lines.length, i + data.contextLines + 1);
+            const contextLines = lines.slice(start, end).map((l, idx) => (start + idx + 1) + ": " + l).join('\n');
+            results.push(path.relative(data.path, fullPath) + ":" + (i + 1) + "\n" + contextLines);
+            if (results.length >= data.maxResults) return;
+          }
+        }
+      } catch {}
+    }
+  }
+}
+
+async function handleFuzzySearch(validPath: string, data: any): Promise<any> {
+  if (!data.query) throw new Error('query is required for fuzzy search');
+
+  const allFiles: Array<{ path: string; score: number }> = [];
+  await collectFiles(validPath, data.path, allFiles);
+
+  const matches = allFiles
+    .map(({ path: p }) => ({ path: p, score: similarityScore(data.query, path.basename(p)) }))
+    .filter(m => m.score >= data.threshold)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, data.maxResults);
+
+  const formatted = matches.map(m => (m.score * 100).toFixed(1) + "% - " + m.path).join('\n');
+  return { content: [{ type: 'text', text: "Found " + matches.length + " fuzzy matches:\n" + formatted }] };
+}
+
+async function collectFiles(dirPath: string, basePath: string, results: Array<{ path: string; score: number }>): Promise<void> {
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isFile()) {
+      results.push({ path: path.relative(basePath, fullPath), score: 0 });
+    } else if (entry.isDirectory()) {
+      await collectFiles(fullPath, basePath, results);
+    }
+  }
+}

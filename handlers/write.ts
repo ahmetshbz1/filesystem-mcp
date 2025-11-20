@@ -1,72 +1,24 @@
 import fs from 'fs/promises';
-import path from 'path';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { validatePath, writeFileContent, applyFileEdits } from '../lib.js';
+import { validatePath } from '../lib.js';
 
-const WriteFileArgsSchema = z.object({
-  path: z.string(),
-  content: z.string(),
-  append: z.boolean().optional().default(false),
-  encoding: z.enum(['utf8', 'utf16le', 'ascii', 'latin1']).optional().default('utf8'),
-  atomic: z.boolean().optional().default(false).describe('Use atomic write (temp file + rename)'),
-  backup: z.boolean().optional().default(false).describe('Create backup before write'),
-  mode: z.number().optional().describe('File permissions (e.g., 0o644)')
-});
-
-const BatchWriteArgsSchema = z.object({
+const WriteArgsSchema = z.object({
+  path: z.string().optional().describe('File path (for single write)'),
+  content: z.string().optional().describe('File content (for single write)'),
+  mode: z.enum(['single', 'batch', 'template']).default('single').describe('Write mode: single, batch, or template'),
   operations: z.array(z.object({
     path: z.string(),
     content: z.string(),
     encoding: z.enum(['utf8', 'utf16le', 'ascii', 'latin1']).optional().default('utf8')
-  })).min(1),
-  atomic: z.boolean().optional().default(false)
-});
-
-const TemplateWriteArgsSchema = z.object({
-  path: z.string(),
-  template: z.string(),
-  variables: z.record(z.string(), z.string()).describe('Key-value pairs for template substitution'),
-  encoding: z.enum(['utf8', 'utf16le', 'ascii', 'latin1']).optional().default('utf8')
-});
-
-const EditOperation = z.object({
-  oldText: z.string(),
-  newText: z.string(),
-  useRegex: z.boolean().optional(),
-  flags: z.string().optional()
-});
-
-const EditFileArgsSchema = z.object({
-  path: z.string(),
-  edits: z.array(EditOperation),
-  dryRun: z.boolean().default(false),
-  backup: z.boolean().optional().default(false)
-});
-
-const CreateDirectoryArgsSchema = z.object({
-  path: z.string(),
-  recursive: z.boolean().optional().default(true),
-  mode: z.number().optional().describe('Directory permissions')
-});
-
-const MoveFileArgsSchema = z.object({
-  source: z.string(),
-  destination: z.string(),
-  overwrite: z.boolean().optional().default(false)
-});
-
-const DeleteFileArgsSchema = z.object({
-  path: z.string(),
-  recursive: z.boolean().optional().default(false).describe('For directories, delete recursively')
-});
-
-const CopyFileArgsSchema = z.object({
-  source: z.string(),
-  destination: z.string(),
-  overwrite: z.boolean().optional().default(false),
-  preserveTimestamps: z.boolean().optional().default(true).describe('Preserve file modification and access times'),
-  recursive: z.boolean().optional().default(true).describe('For directories, copy recursively')
+  })).optional().describe('Batch operations array'),
+  template: z.string().optional().describe('Template content with {{variables}}'),
+  variables: z.record(z.string(), z.string()).optional().describe('Variables for template substitution'),
+  append: z.boolean().optional().default(false).describe('Append to file instead of overwrite'),
+  encoding: z.enum(['utf8', 'utf16le', 'ascii', 'latin1']).optional().default('utf8').describe('File encoding'),
+  atomic: z.boolean().optional().default(false).describe('Use atomic write (temp file + rename)'),
+  backup: z.boolean().optional().default(false).describe('Create backup before write'),
+  permissions: z.number().optional().describe('File permissions (e.g., 0o644)')
 });
 
 type ToolInput = any;
@@ -96,208 +48,103 @@ async function createBackup(filePath: string): Promise<string> {
   }
 }
 
-async function copyRecursive(source: string, destination: string, preserveTimestamps: boolean): Promise<void> {
-  const stats = await fs.stat(source);
-
-  if (stats.isDirectory()) {
-    await fs.mkdir(destination, { recursive: true });
-    const entries = await fs.readdir(source, { withFileTypes: true });
-
-    await Promise.all(
-      entries.map(async (entry) => {
-        const srcPath = path.join(source, entry.name);
-        const destPath = path.join(destination, entry.name);
-        await copyRecursive(srcPath, destPath, preserveTimestamps);
-      })
-    );
-
-    if (preserveTimestamps) {
-      await fs.utimes(destination, stats.atime, stats.mtime);
-    }
-  } else {
-    await fs.copyFile(source, destination);
-    if (preserveTimestamps) {
-      await fs.utimes(destination, stats.atime, stats.mtime);
-    }
-  }
-}
-
 export const tools = [
-  { name: 'write_file', description: 'Write file with atomic writes, backup, and encoding support', inputSchema: zodToJsonSchema(WriteFileArgsSchema) as ToolInput },
-  { name: 'batch_write', description: 'Write multiple files in one operation', inputSchema: zodToJsonSchema(BatchWriteArgsSchema) as ToolInput },
-  { name: 'template_write', description: 'Write file from template with variable substitution', inputSchema: zodToJsonSchema(TemplateWriteArgsSchema) as ToolInput },
-  { name: 'edit_file', description: 'Edit file with pattern replacement and backup', inputSchema: zodToJsonSchema(EditFileArgsSchema) as ToolInput },
-  { name: 'create_directory', description: 'Create directory with permission control', inputSchema: zodToJsonSchema(CreateDirectoryArgsSchema) as ToolInput },
-  { name: 'move_file', description: 'Move or rename file with overwrite control', inputSchema: zodToJsonSchema(MoveFileArgsSchema) as ToolInput },
-  { name: 'copy_file', description: 'Copy file or directory with timestamp preservation', inputSchema: zodToJsonSchema(CopyFileArgsSchema) as ToolInput },
-  { name: 'delete_file', description: 'Delete file or directory', inputSchema: zodToJsonSchema(DeleteFileArgsSchema) as ToolInput },
+  {
+    name: 'write',
+    description: 'Unified write tool for single, batch, and template writes. Use mode parameter to specify write type.',
+    inputSchema: zodToJsonSchema(WriteArgsSchema) as ToolInput
+  }
 ];
 
 export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async write_file(args) {
-    const parsed = WriteFileArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for write_file: ${parsed.error}`);
-    const validPath = await validatePath(parsed.data.path);
+  async write(args) {
+    const parsed = WriteArgsSchema.safeParse(args);
+    if (!parsed.success) throw new Error(`Invalid arguments for write: ${parsed.error}`);
 
-    let backupPath = '';
-    if (parsed.data.backup) {
-      backupPath = await createBackup(validPath);
+    const writeMode = parsed.data.mode;
+
+    switch (writeMode) {
+      case 'single':
+        return await handleSingleWrite(parsed.data);
+      case 'batch':
+        return await handleBatchWrite(parsed.data);
+      case 'template':
+        return await handleTemplateWrite(parsed.data);
+      default:
+        throw new Error(`Unknown write mode: ${writeMode}`);
     }
-
-    if (parsed.data.append) {
-      await fs.appendFile(validPath, parsed.data.content, { encoding: parsed.data.encoding as BufferEncoding });
-    } else if (parsed.data.atomic) {
-      await atomicWrite(validPath, parsed.data.content, parsed.data.encoding as BufferEncoding);
-    } else {
-      await fs.writeFile(validPath, parsed.data.content, { encoding: parsed.data.encoding as BufferEncoding });
-    }
-
-    if (parsed.data.mode !== undefined) {
-      await fs.chmod(validPath, parsed.data.mode);
-    }
-
-    const message = `Successfully ${parsed.data.append ? 'appended to' : 'wrote to'} ${parsed.data.path}${backupPath ? ` (backup: ${backupPath})` : ''}`;
-    return { content: [{ type: 'text', text: message }] };
-  },
-
-  async batch_write(args) {
-    const parsed = BatchWriteArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for batch_write: ${parsed.error}`);
-
-    const results = await Promise.allSettled(
-      parsed.data.operations.map(async (op) => {
-        const validPath = await validatePath(op.path);
-        if (parsed.data.atomic) {
-          await atomicWrite(validPath, op.content, op.encoding as BufferEncoding);
-        } else {
-          await fs.writeFile(validPath, op.content, { encoding: op.encoding as BufferEncoding });
-        }
-        return op.path;
-      })
-    );
-
-    const successful = results.filter((r) => r.status === 'fulfilled').length;
-    const failed = results.filter((r) => r.status === 'rejected');
-
-    let message = `Batch write complete: ${successful}/${parsed.data.operations.length} successful`;
-    if (failed.length > 0) {
-      const errors = failed.map((f) => (f as PromiseRejectedResult).reason.message).join(', ');
-      message += `\nErrors: ${errors}`;
-    }
-
-    return { content: [{ type: 'text', text: message }] };
-  },
-
-  async template_write(args) {
-    const parsed = TemplateWriteArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for template_write: ${parsed.error}`);
-    const validPath = await validatePath(parsed.data.path);
-
-    let content = parsed.data.template;
-    for (const [key, value] of Object.entries(parsed.data.variables)) {
-      const regex = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g');
-      content = content.replace(regex, value);
-    }
-
-    await fs.writeFile(validPath, content, { encoding: parsed.data.encoding as BufferEncoding });
-    return { content: [{ type: 'text', text: `Successfully wrote template to ${parsed.data.path}` }] };
-  },
-
-  async edit_file(args) {
-    const parsed = EditFileArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for edit_file: ${parsed.error}`);
-    const validPath = await validatePath(parsed.data.path);
-
-    let backupPath = '';
-    if (parsed.data.backup && !parsed.data.dryRun) {
-      backupPath = await createBackup(validPath);
-    }
-
-    const edits = parsed.data.edits as import('../lib.js').FileEdit[];
-    const result = await applyFileEdits(validPath, edits, parsed.data.dryRun);
-
-    const message = backupPath ? `${result}\nBackup created: ${backupPath}` : result;
-    return { content: [{ type: 'text', text: message }] };
-  },
-
-  async create_directory(args) {
-    const parsed = CreateDirectoryArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for create_directory: ${parsed.error}`);
-    const validPath = await validatePath(parsed.data.path);
-
-    await fs.mkdir(validPath, {
-      recursive: parsed.data.recursive,
-      mode: parsed.data.mode
-    });
-
-    return { content: [{ type: 'text', text: `Successfully created directory ${parsed.data.path}` }] };
-  },
-
-  async move_file(args) {
-    const parsed = MoveFileArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for move_file: ${parsed.error}`);
-    const validSourcePath = await validatePath(parsed.data.source);
-    const validDestPath = await validatePath(parsed.data.destination);
-
-    if (!parsed.data.overwrite) {
-      try {
-        await fs.access(validDestPath);
-        throw new Error(`Destination ${parsed.data.destination} already exists. Use overwrite:true to replace.`);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-    }
-
-    await fs.rename(validSourcePath, validDestPath);
-    return { content: [{ type: 'text', text: `Successfully moved ${parsed.data.source} to ${parsed.data.destination}` }] };
-  },
-
-  async copy_file(args) {
-    const parsed = CopyFileArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for copy_file: ${parsed.error}`);
-    const validSourcePath = await validatePath(parsed.data.source);
-    const validDestPath = await validatePath(parsed.data.destination);
-
-    if (!parsed.data.overwrite) {
-      try {
-        await fs.access(validDestPath);
-        throw new Error(`Destination ${parsed.data.destination} already exists. Use overwrite:true to replace.`);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-    }
-
-    const stats = await fs.stat(validSourcePath);
-    if (stats.isDirectory() && parsed.data.recursive) {
-      await copyRecursive(validSourcePath, validDestPath, parsed.data.preserveTimestamps);
-    } else if (stats.isDirectory()) {
-      throw new Error(`Source is a directory. Use recursive:true to copy directories.`);
-    } else {
-      await fs.copyFile(validSourcePath, validDestPath);
-      if (parsed.data.preserveTimestamps) {
-        await fs.utimes(validDestPath, stats.atime, stats.mtime);
-      }
-    }
-
-    return { content: [{ type: 'text', text: `Successfully copied ${parsed.data.source} to ${parsed.data.destination}` }] };
-  },
-
-  async delete_file(args) {
-    const parsed = DeleteFileArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for delete_file: ${parsed.error}`);
-    const validPath = await validatePath(parsed.data.path);
-
-    const stats = await fs.stat(validPath);
-    if (stats.isDirectory()) {
-      if (parsed.data.recursive) {
-        await fs.rm(validPath, { recursive: true, force: true });
-      } else {
-        await fs.rmdir(validPath);
-      }
-    } else {
-      await fs.unlink(validPath);
-    }
-
-    return { content: [{ type: 'text', text: `Successfully deleted ${parsed.data.path}` }] };
   }
 };
+
+async function handleSingleWrite(data: z.infer<typeof WriteArgsSchema>): Promise<any> {
+  if (!data.path) throw new Error('path is required for single write');
+  if (data.content === undefined) throw new Error('content is required for single write');
+
+  const validPath = await validatePath(data.path);
+
+  let backupPath = '';
+  if (data.backup) {
+    backupPath = await createBackup(validPath);
+  }
+
+  if (data.append) {
+    await fs.appendFile(validPath, data.content, { encoding: data.encoding as BufferEncoding });
+  } else if (data.atomic) {
+    await atomicWrite(validPath, data.content, data.encoding as BufferEncoding);
+  } else {
+    await fs.writeFile(validPath, data.content, { encoding: data.encoding as BufferEncoding });
+  }
+
+  if (data.permissions !== undefined) {
+    await fs.chmod(validPath, data.permissions);
+  }
+
+  const message = `Successfully ${data.append ? 'appended to' : 'wrote to'} ${data.path}${backupPath ? ` (backup: ${backupPath})` : ''}`;
+  return { content: [{ type: 'text', text: message }] };
+}
+
+async function handleBatchWrite(data: z.infer<typeof WriteArgsSchema>): Promise<any> {
+  if (!data.operations || data.operations.length === 0) {
+    throw new Error('operations array is required for batch write');
+  }
+
+  const results = await Promise.allSettled(
+    data.operations.map(async (op) => {
+      const validPath = await validatePath(op.path);
+      if (data.atomic) {
+        await atomicWrite(validPath, op.content, op.encoding as BufferEncoding);
+      } else {
+        await fs.writeFile(validPath, op.content, { encoding: op.encoding as BufferEncoding });
+      }
+      return op.path;
+    })
+  );
+
+  const successful = results.filter((r) => r.status === 'fulfilled').length;
+  const failed = results.filter((r) => r.status === 'rejected');
+
+  let message = `Batch write complete: ${successful}/${data.operations.length} successful`;
+  if (failed.length > 0) {
+    const errors = failed.map((f) => (f as PromiseRejectedResult).reason.message).join(', ');
+    message += `\nErrors: ${errors}`;
+  }
+
+  return { content: [{ type: 'text', text: message }] };
+}
+
+async function handleTemplateWrite(data: z.infer<typeof WriteArgsSchema>): Promise<any> {
+  if (!data.path) throw new Error('path is required for template write');
+  if (!data.template) throw new Error('template is required for template write');
+  if (!data.variables) throw new Error('variables are required for template write');
+
+  const validPath = await validatePath(data.path);
+
+  let content = data.template;
+  for (const [key, value] of Object.entries(data.variables)) {
+    const regex = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g');
+    content = content.replace(regex, value);
+  }
+
+  await fs.writeFile(validPath, content, { encoding: data.encoding as BufferEncoding });
+  return { content: [{ type: 'text', text: `Successfully wrote template to ${data.path}` }] };
+}

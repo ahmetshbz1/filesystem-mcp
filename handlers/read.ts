@@ -5,30 +5,21 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath, readFileContent, tailFile, headFile } from '../lib.js';
 
-const ReadTextFileArgsSchema = z.object({
-  path: z.string(),
-  tail: z.number().optional().describe('If provided, returns only the last N lines of the file'),
-  head: z.number().optional().describe('If provided, returns only the first N lines of the file'),
-  stream: z.boolean().optional().default(false).describe('If true, streams the file content in chunks for large files'),
+const ReadArgsSchema = z.object({
+  path: z.string().optional().describe('File path (required for single file, ignored for multiple)'),
+  paths: z.array(z.string()).optional().describe('Array of file paths (for multiple files)'),
+  type: z.enum(['text', 'binary', 'media', 'multiple']).default('text').describe('Read type: text, binary, media, or multiple'),
   encoding: z.enum(['utf8', 'utf16le', 'ascii', 'latin1', 'base64', 'hex']).optional().default('utf8').describe('File encoding'),
-  includeMetadata: z.boolean().optional().default(false).describe('Include file metadata (size, mtime, etc.) with content'),
+  tail: z.number().optional().describe('Return only last N lines'),
+  head: z.number().optional().describe('Return only first N lines'),
+  stream: z.boolean().optional().default(false).describe('Stream large files'),
+  includeMetadata: z.boolean().optional().default(false).describe('Include file metadata'),
   lineRange: z.object({
     start: z.number().min(1).describe('Start line (1-indexed)'),
     end: z.number().min(1).describe('End line (1-indexed)')
-  }).optional().describe('Read specific line range')
-});
-
-const ReadBinaryFileArgsSchema = z.object({
-  path: z.string(),
-  maxSize: z.number().optional().default(10 * 1024 * 1024).describe('Maximum file size in bytes (default 10MB)')
-});
-
-const ReadMediaFileArgsSchema = z.object({ path: z.string() });
-
-const ReadMultipleFilesArgsSchema = z.object({
-  paths: z.array(z.string()).min(1, 'At least one file path must be provided'),
-  encoding: z.enum(['utf8', 'utf16le', 'ascii', 'latin1']).optional().default('utf8').describe('File encoding for all files'),
-  continueOnError: z.boolean().optional().default(true).describe('Continue reading other files if one fails')
+  }).optional().describe('Read specific line range'),
+  maxSize: z.number().optional().default(10 * 1024 * 1024).describe('Max file size for binary (default 10MB)'),
+  continueOnError: z.boolean().optional().default(true).describe('Continue on error for multiple files')
 });
 
 type ToolInput = any;
@@ -44,143 +35,182 @@ async function readFileAsBase64Stream(filePath: string): Promise<string> {
 }
 
 export const tools = [
-  { name: 'read_file', description: 'Read file as text (deprecated).', inputSchema: zodToJsonSchema(ReadTextFileArgsSchema) as ToolInput },
-  { name: 'read_text_file', description: 'Read file as text with encoding, line range, and metadata options.', inputSchema: zodToJsonSchema(ReadTextFileArgsSchema) as ToolInput },
-  { name: 'read_binary_file', description: 'Read binary file as base64.', inputSchema: zodToJsonSchema(ReadBinaryFileArgsSchema) as ToolInput },
-  { name: 'read_media_file', description: 'Read media file (image/audio).', inputSchema: zodToJsonSchema(ReadMediaFileArgsSchema) as ToolInput },
-  { name: 'read_multiple_files', description: 'Read multiple files with encoding support and error handling.', inputSchema: zodToJsonSchema(ReadMultipleFilesArgsSchema) as ToolInput },
+  {
+    name: 'read',
+    description: 'Unified read tool for text, binary, media, and multiple files. Use type parameter to specify read mode.',
+    inputSchema: zodToJsonSchema(ReadArgsSchema) as ToolInput
+  }
 ];
 
 export const handlers: Record<string, (args: any) => Promise<any>> = {
-  async read_file(args) {
-    return handlers.read_text_file(args);
-  },
-  async read_text_file(args) {
-    const parsed = ReadTextFileArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for read_text_file: ${parsed.error}`);
-    const validPath = await validatePath(parsed.data.path);
+  async read(args) {
+    const parsed = ReadArgsSchema.safeParse(args);
+    if (!parsed.success) throw new Error(`Invalid arguments for read: ${parsed.error}`);
 
-    if (parsed.data.head && parsed.data.tail) throw new Error('Cannot specify both head and tail');
-    if (parsed.data.lineRange && (parsed.data.head || parsed.data.tail)) {
-      throw new Error('Cannot specify lineRange with head or tail');
+    const readType = parsed.data.type;
+
+    switch (readType) {
+      case 'text':
+        return await handleTextRead(parsed.data);
+      case 'binary':
+        return await handleBinaryRead(parsed.data);
+      case 'media':
+        return await handleMediaRead(parsed.data);
+      case 'multiple':
+        return await handleMultipleRead(parsed.data);
+      default:
+        throw new Error(`Unknown read type: ${readType}`);
     }
+  }
+};
 
-    const stats = await fs.stat(validPath);
-    let content: string;
+async function handleTextRead(data: z.infer<typeof ReadArgsSchema>): Promise<any> {
+  if (!data.path) throw new Error('path is required for text read');
+  const validPath = await validatePath(data.path);
 
-    if (parsed.data.tail) {
-      content = await tailFile(validPath, parsed.data.tail);
-    } else if (parsed.data.head) {
-      content = await headFile(validPath, parsed.data.head);
-    } else if (parsed.data.lineRange) {
-      const fileContent = await fs.readFile(validPath, { encoding: parsed.data.encoding as BufferEncoding });
-      const lines = fileContent.split('\n');
-      const { start, end } = parsed.data.lineRange;
-      if (start > lines.length) throw new Error(`Start line ${start} exceeds file length ${lines.length}`);
-      content = lines.slice(start - 1, end).join('\n');
-    } else if (parsed.data.stream && stats.size > 1024 * 1024) {
-      const stream = createReadStream(validPath, {
-        encoding: parsed.data.encoding as BufferEncoding,
-        highWaterMark: 64 * 1024
-      });
-      const chunks: string[] = [];
-      for await (const chunk of stream) {
-        chunks.push(chunk);
-        if (chunks.length > 10) break;
-      }
-      content = `Streaming file (${stats.size} bytes). First chunks:\n${chunks.join('')}\n... (truncated)`;
-    } else {
-      content = await fs.readFile(validPath, { encoding: parsed.data.encoding as BufferEncoding });
+  if (data.head && data.tail) throw new Error('Cannot specify both head and tail');
+  if (data.lineRange && (data.head || data.tail)) {
+    throw new Error('Cannot specify lineRange with head or tail');
+  }
+
+  const stats = await fs.stat(validPath);
+  let content: string;
+
+  if (data.tail) {
+    content = await tailFile(validPath, data.tail);
+  } else if (data.head) {
+    content = await headFile(validPath, data.head);
+  } else if (data.lineRange) {
+    const fileContent = await fs.readFile(validPath, { encoding: data.encoding as BufferEncoding });
+    const lines = fileContent.split('\n');
+    const { start, end } = data.lineRange;
+    if (start > lines.length) throw new Error(`Start line ${start} exceeds file length ${lines.length}`);
+    content = lines.slice(start - 1, end).join('\n');
+  } else if (data.stream && stats.size > 1024 * 1024) {
+    const stream = createReadStream(validPath, {
+      encoding: data.encoding as BufferEncoding,
+      highWaterMark: 64 * 1024
+    });
+    const chunks: string[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+      if (chunks.length > 10) break;
     }
+    content = `Streaming file (${stats.size} bytes). First chunks:\n${chunks.join('')}\n... (truncated)`;
+  } else {
+    content = await fs.readFile(validPath, { encoding: data.encoding as BufferEncoding });
+  }
 
-    if (parsed.data.includeMetadata) {
-      const metadata = {
-        path: parsed.data.path,
-        size: stats.size,
-        created: stats.birthtime,
-        modified: stats.mtime,
-        accessed: stats.atime,
-        encoding: parsed.data.encoding
-      };
-      return {
-        content: [{
-          type: 'text',
-          text: `=== File Metadata ===\n${JSON.stringify(metadata, null, 2)}\n\n=== Content ===\n${content}`
-        }]
-      };
-    }
-
-    return { content: [{ type: 'text', text: content }] };
-  },
-  async read_binary_file(args) {
-    const parsed = ReadBinaryFileArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for read_binary_file: ${parsed.error}`);
-    const validPath = await validatePath(parsed.data.path);
-
-    const stats = await fs.stat(validPath);
-    if (stats.size > parsed.data.maxSize) {
-      throw new Error(`File size ${stats.size} exceeds maximum ${parsed.data.maxSize} bytes`);
-    }
-
-    const data = await readFileAsBase64Stream(validPath);
+  if (data.includeMetadata) {
+    const metadata = {
+      path: data.path,
+      size: stats.size,
+      created: stats.birthtime,
+      modified: stats.mtime,
+      accessed: stats.atime,
+      permissions: stats.mode.toString(8).slice(-3)
+    };
     return {
       content: [{
         type: 'text',
-        text: `Binary file (${stats.size} bytes):\nBase64: ${data}`
+        text: `File: ${data.path}\nMetadata: ${JSON.stringify(metadata, null, 2)}\n\nContent:\n${content}`
       }]
     };
-  },
-  async read_media_file(args) {
-    const parsed = ReadMediaFileArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for read_media_file: ${parsed.error}`);
-    const validPath = await validatePath(parsed.data.path);
-    const extension = path.extname(validPath).toLowerCase();
-    const mimeTypes: Record<string, string> = {
-      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.flac': 'audio/flac'
-    };
-    const mimeType = mimeTypes[extension] || 'application/octet-stream';
-    const data = await readFileAsBase64Stream(validPath);
-    const type = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('audio/') ? 'audio' : 'blob';
-    return { content: [{ type, data, mimeType }] };
-  },
-  async read_multiple_files(args) {
-    const parsed = ReadMultipleFilesArgsSchema.safeParse(args);
-    if (!parsed.success) throw new Error(`Invalid arguments for read_multiple_files: ${parsed.error}`);
-
-    const results = await Promise.all(parsed.data.paths.map(async (filePath: string) => {
-      try {
-        const validPath = await validatePath(filePath);
-        const content = await fs.readFile(validPath, { encoding: parsed.data.encoding as BufferEncoding });
-        const stats = await fs.stat(validPath);
-        return {
-          success: true,
-          path: filePath,
-          size: stats.size,
-          content
-        };
-      } catch (error) {
-        if (parsed.data.continueOnError) {
-          return {
-            success: false,
-            path: filePath,
-            error: error instanceof Error ? error.message : String(error)
-          };
-        }
-        throw error;
-      }
-    }));
-
-    const successCount = results.filter((r: { success: boolean }) => r.success).length;
-    const failCount = results.filter((r: { success: boolean }) => !r.success).length;
-
-    const output = results.map((r: { success: boolean; path: string; content?: string; size?: number; error?: string }) => {
-      if (r.success) {
-        return `=== ${r.path} (${r.size} bytes) ===\n${r.content}\n`;
-      }
-      return `=== ${r.path} [ERROR] ===\n${r.error}\n`;
-    });
-
-    const summary = `\n=== Summary ===\nSuccessful: ${successCount}, Failed: ${failCount}\n`;
-    return { content: [{ type: 'text', text: output.join('\n---\n') + summary }] };
   }
-};
+
+  return { content: [{ type: 'text', text: content }] };
+}
+
+async function handleBinaryRead(data: z.infer<typeof ReadArgsSchema>): Promise<any> {
+  if (!data.path) throw new Error('path is required for binary read');
+  const validPath = await validatePath(data.path);
+  const stats = await fs.stat(validPath);
+
+  if (stats.size > data.maxSize!) {
+    throw new Error(`File size ${stats.size} exceeds maximum ${data.maxSize}`);
+  }
+
+  const base64Content = await readFileAsBase64Stream(validPath);
+  return {
+    content: [{
+      type: 'text',
+      text: `Binary file read as base64 (${stats.size} bytes):\n${base64Content}`
+    }]
+  };
+}
+
+async function handleMediaRead(data: z.infer<typeof ReadArgsSchema>): Promise<any> {
+  if (!data.path) throw new Error('path is required for media read');
+  const validPath = await validatePath(data.path);
+  const stats = await fs.stat(validPath);
+  const ext = path.extname(validPath).toLowerCase();
+
+  const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+  const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac'];
+
+  if (imageExtensions.includes(ext)) {
+    const imageData = await fs.readFile(validPath);
+    const base64 = imageData.toString('base64');
+    const mimeType = ext === '.svg' ? 'image/svg+xml' : `image/${ext.slice(1)}`;
+
+    return {
+      content: [{
+        type: 'image',
+        data: base64,
+        mimeType: mimeType
+      }]
+    };
+  } else if (audioExtensions.includes(ext)) {
+    const audioData = await fs.readFile(validPath);
+    const base64 = audioData.toString('base64');
+
+    return {
+      content: [{
+        type: 'text',
+        text: `Audio file: ${data.path}\nSize: ${stats.size} bytes\nFormat: ${ext}\nBase64: ${base64.substring(0, 100)}... (truncated)`
+      }]
+    };
+  } else {
+    throw new Error(`Unsupported media type: ${ext}`);
+  }
+}
+
+async function handleMultipleRead(data: z.infer<typeof ReadArgsSchema>): Promise<any> {
+  if (!data.paths || data.paths.length === 0) {
+    throw new Error('paths array is required for multiple read');
+  }
+
+  const results = await Promise.allSettled(
+    data.paths.map(async (filePath) => {
+      const validPath = await validatePath(filePath);
+      const content = await fs.readFile(validPath, { encoding: data.encoding as BufferEncoding });
+      return { path: filePath, content };
+    })
+  );
+
+  const successful: Array<{ path: string; content: string }> = [];
+  const failed: Array<{ path: string; error: string }> = [];
+
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      successful.push(result.value);
+    } else {
+      failed.push({ path: data.paths![index], error: result.reason.message });
+    }
+  });
+
+  let text = `Read ${successful.length}/${data.paths.length} files successfully\n\n`;
+
+  successful.forEach(({ path, content }) => {
+    text += `=== ${path} ===\n${content}\n\n`;
+  });
+
+  if (failed.length > 0) {
+    text += `\nFailed files:\n`;
+    failed.forEach(({ path, error }) => {
+      text += `- ${path}: ${error}\n`;
+    });
+  }
+
+  return { content: [{ type: 'text', text }] };
+}

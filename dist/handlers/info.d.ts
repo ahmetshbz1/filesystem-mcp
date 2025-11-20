@@ -4,5 +4,5 @@ export declare const tools: {
     description: string;
     inputSchema: ToolInput;
 }[];
-export declare const handlers: Record<string, (args: any, allowedDirectories?: string[]) => Promise<any>>;
+export declare const handlers: Record<string, (args: any) => Promise<any>>;
 export {};
