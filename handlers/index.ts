@@ -14,8 +14,10 @@ import * as backup from './backup.js';
 import * as compress from './compress.js';
 import * as hash from './hash.js';
 import * as merge from './merge.js';
+import * as git from './git.js';
+import * as validation from './validation.js';
 
-const allTools = [...read.tools, ...write.tools, ...list.tools, ...search.tools, ...info.tools, ...compare.tools, ...backup.tools, ...compress.tools, ...hash.tools, ...merge.tools];
+const allTools = [...read.tools, ...write.tools, ...list.tools, ...search.tools, ...info.tools, ...compare.tools, ...backup.tools, ...compress.tools, ...hash.tools, ...merge.tools, ...git.tools, ...validation.tools];
 
 export function installHandlers(server: Server, allowedDirectories: string[]) {
   setAllowedDirectories(allowedDirectories);
@@ -33,6 +35,8 @@ export function installHandlers(server: Server, allowedDirectories: string[]) {
     ...compress.handlers,
     ...hash.handlers,
     ...merge.handlers,
+    ...git.handlers,
+    ...validation.handlers,
   };
 
   const rateLimit = new Map<string, { count: number; resetTime: number }>();

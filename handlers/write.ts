@@ -61,6 +61,14 @@ const DeleteFileArgsSchema = z.object({
   recursive: z.boolean().optional().default(false).describe('For directories, delete recursively')
 });
 
+const CopyFileArgsSchema = z.object({
+  source: z.string(),
+  destination: z.string(),
+  overwrite: z.boolean().optional().default(false),
+  preserveTimestamps: z.boolean().optional().default(true).describe('Preserve file modification and access times'),
+  recursive: z.boolean().optional().default(true).describe('For directories, copy recursively')
+});
+
 type ToolInput = any;
 
 async function atomicWrite(filePath: string, content: string, encoding: BufferEncoding): Promise<void> {
@@ -88,6 +96,32 @@ async function createBackup(filePath: string): Promise<string> {
   }
 }
 
+async function copyRecursive(source: string, destination: string, preserveTimestamps: boolean): Promise<void> {
+  const stats = await fs.stat(source);
+
+  if (stats.isDirectory()) {
+    await fs.mkdir(destination, { recursive: true });
+    const entries = await fs.readdir(source, { withFileTypes: true });
+
+    await Promise.all(
+      entries.map(async (entry) => {
+        const srcPath = path.join(source, entry.name);
+        const destPath = path.join(destination, entry.name);
+        await copyRecursive(srcPath, destPath, preserveTimestamps);
+      })
+    );
+
+    if (preserveTimestamps) {
+      await fs.utimes(destination, stats.atime, stats.mtime);
+    }
+  } else {
+    await fs.copyFile(source, destination);
+    if (preserveTimestamps) {
+      await fs.utimes(destination, stats.atime, stats.mtime);
+    }
+  }
+}
+
 export const tools = [
   { name: 'write_file', description: 'Write file with atomic writes, backup, and encoding support', inputSchema: zodToJsonSchema(WriteFileArgsSchema) as ToolInput },
   { name: 'batch_write', description: 'Write multiple files in one operation', inputSchema: zodToJsonSchema(BatchWriteArgsSchema) as ToolInput },
@@ -95,6 +129,7 @@ export const tools = [
   { name: 'edit_file', description: 'Edit file with pattern replacement and backup', inputSchema: zodToJsonSchema(EditFileArgsSchema) as ToolInput },
   { name: 'create_directory', description: 'Create directory with permission control', inputSchema: zodToJsonSchema(CreateDirectoryArgsSchema) as ToolInput },
   { name: 'move_file', description: 'Move or rename file with overwrite control', inputSchema: zodToJsonSchema(MoveFileArgsSchema) as ToolInput },
+  { name: 'copy_file', description: 'Copy file or directory with timestamp preservation', inputSchema: zodToJsonSchema(CopyFileArgsSchema) as ToolInput },
   { name: 'delete_file', description: 'Delete file or directory', inputSchema: zodToJsonSchema(DeleteFileArgsSchema) as ToolInput },
 ];
 
@@ -215,6 +250,36 @@ export const handlers: Record<string, (args: any) => Promise<any>> = {
 
     await fs.rename(validSourcePath, validDestPath);
     return { content: [{ type: 'text', text: `Successfully moved ${parsed.data.source} to ${parsed.data.destination}` }] };
+  },
+
+  async copy_file(args) {
+    const parsed = CopyFileArgsSchema.safeParse(args);
+    if (!parsed.success) throw new Error(`Invalid arguments for copy_file: ${parsed.error}`);
+    const validSourcePath = await validatePath(parsed.data.source);
+    const validDestPath = await validatePath(parsed.data.destination);
+
+    if (!parsed.data.overwrite) {
+      try {
+        await fs.access(validDestPath);
+        throw new Error(`Destination ${parsed.data.destination} already exists. Use overwrite:true to replace.`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+
+    const stats = await fs.stat(validSourcePath);
+    if (stats.isDirectory() && parsed.data.recursive) {
+      await copyRecursive(validSourcePath, validDestPath, parsed.data.preserveTimestamps);
+    } else if (stats.isDirectory()) {
+      throw new Error(`Source is a directory. Use recursive:true to copy directories.`);
+    } else {
+      await fs.copyFile(validSourcePath, validDestPath);
+      if (parsed.data.preserveTimestamps) {
+        await fs.utimes(validDestPath, stats.atime, stats.mtime);
+      }
+    }
+
+    return { content: [{ type: 'text', text: `Successfully copied ${parsed.data.source} to ${parsed.data.destination}` }] };
   },
 
   async delete_file(args) {

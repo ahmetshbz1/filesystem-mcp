@@ -12,7 +12,9 @@ import * as backup from './backup.js';
 import * as compress from './compress.js';
 import * as hash from './hash.js';
 import * as merge from './merge.js';
-const allTools = [...read.tools, ...write.tools, ...list.tools, ...search.tools, ...info.tools, ...compare.tools, ...backup.tools, ...compress.tools, ...hash.tools, ...merge.tools];
+import * as git from './git.js';
+import * as validation from './validation.js';
+const allTools = [...read.tools, ...write.tools, ...list.tools, ...search.tools, ...info.tools, ...compare.tools, ...backup.tools, ...compress.tools, ...hash.tools, ...merge.tools, ...git.tools, ...validation.tools];
 export function installHandlers(server, allowedDirectories) {
     setAllowedDirectories(allowedDirectories);
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: allTools }));
@@ -27,6 +29,8 @@ export function installHandlers(server, allowedDirectories) {
         ...compress.handlers,
         ...hash.handlers,
         ...merge.handlers,
+        ...git.handlers,
+        ...validation.handlers,
     };
     const rateLimit = new Map();
     const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute

@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import path from 'path';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { validatePath, applyFileEdits } from '../lib.js';
@@ -51,6 +52,13 @@ const DeleteFileArgsSchema = z.object({
     path: z.string(),
     recursive: z.boolean().optional().default(false).describe('For directories, delete recursively')
 });
+const CopyFileArgsSchema = z.object({
+    source: z.string(),
+    destination: z.string(),
+    overwrite: z.boolean().optional().default(false),
+    preserveTimestamps: z.boolean().optional().default(true).describe('Preserve file modification and access times'),
+    recursive: z.boolean().optional().default(true).describe('For directories, copy recursively')
+});
 async function atomicWrite(filePath, content, encoding) {
     const tempPath = `${filePath}.tmp.${Date.now()}`;
     try {
@@ -78,6 +86,27 @@ async function createBackup(filePath) {
         return '';
     }
 }
+async function copyRecursive(source, destination, preserveTimestamps) {
+    const stats = await fs.stat(source);
+    if (stats.isDirectory()) {
+        await fs.mkdir(destination, { recursive: true });
+        const entries = await fs.readdir(source, { withFileTypes: true });
+        await Promise.all(entries.map(async (entry) => {
+            const srcPath = path.join(source, entry.name);
+            const destPath = path.join(destination, entry.name);
+            await copyRecursive(srcPath, destPath, preserveTimestamps);
+        }));
+        if (preserveTimestamps) {
+            await fs.utimes(destination, stats.atime, stats.mtime);
+        }
+    }
+    else {
+        await fs.copyFile(source, destination);
+        if (preserveTimestamps) {
+            await fs.utimes(destination, stats.atime, stats.mtime);
+        }
+    }
+}
 export const tools = [
     { name: 'write_file', description: 'Write file with atomic writes, backup, and encoding support', inputSchema: zodToJsonSchema(WriteFileArgsSchema) },
     { name: 'batch_write', description: 'Write multiple files in one operation', inputSchema: zodToJsonSchema(BatchWriteArgsSchema) },
@@ -85,6 +114,7 @@ export const tools = [
     { name: 'edit_file', description: 'Edit file with pattern replacement and backup', inputSchema: zodToJsonSchema(EditFileArgsSchema) },
     { name: 'create_directory', description: 'Create directory with permission control', inputSchema: zodToJsonSchema(CreateDirectoryArgsSchema) },
     { name: 'move_file', description: 'Move or rename file with overwrite control', inputSchema: zodToJsonSchema(MoveFileArgsSchema) },
+    { name: 'copy_file', description: 'Copy file or directory with timestamp preservation', inputSchema: zodToJsonSchema(CopyFileArgsSchema) },
     { name: 'delete_file', description: 'Delete file or directory', inputSchema: zodToJsonSchema(DeleteFileArgsSchema) },
 ];
 export const handlers = {
@@ -191,6 +221,37 @@ export const handlers = {
         }
         await fs.rename(validSourcePath, validDestPath);
         return { content: [{ type: 'text', text: `Successfully moved ${parsed.data.source} to ${parsed.data.destination}` }] };
+    },
+    async copy_file(args) {
+        const parsed = CopyFileArgsSchema.safeParse(args);
+        if (!parsed.success)
+            throw new Error(`Invalid arguments for copy_file: ${parsed.error}`);
+        const validSourcePath = await validatePath(parsed.data.source);
+        const validDestPath = await validatePath(parsed.data.destination);
+        if (!parsed.data.overwrite) {
+            try {
+                await fs.access(validDestPath);
+                throw new Error(`Destination ${parsed.data.destination} already exists. Use overwrite:true to replace.`);
+            }
+            catch (error) {
+                if (error.code !== 'ENOENT')
+                    throw error;
+            }
+        }
+        const stats = await fs.stat(validSourcePath);
+        if (stats.isDirectory() && parsed.data.recursive) {
+            await copyRecursive(validSourcePath, validDestPath, parsed.data.preserveTimestamps);
+        }
+        else if (stats.isDirectory()) {
+            throw new Error(`Source is a directory. Use recursive:true to copy directories.`);
+        }
+        else {
+            await fs.copyFile(validSourcePath, validDestPath);
+            if (parsed.data.preserveTimestamps) {
+                await fs.utimes(validDestPath, stats.atime, stats.mtime);
+            }
+        }
+        return { content: [{ type: 'text', text: `Successfully copied ${parsed.data.source} to ${parsed.data.destination}` }] };
     },
     async delete_file(args) {
         const parsed = DeleteFileArgsSchema.safeParse(args);
