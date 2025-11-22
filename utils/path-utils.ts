@@ -17,7 +17,10 @@ export function normalizePath(p: string): string {
   const isUnixPath = p.startsWith('/') && (
     p.match(/^\/mnt\/[a-z]\//i) || (process.platform !== 'win32') || (process.platform === 'win32' && !p.match(/^\/[a-zA-Z]\//))
   );
-  if (isUnixPath) return p.replace(/\/+/g, '/').replace(/\/+$/, '');
+  if (isUnixPath) {
+    const normalized = p.replace(/\/+/g, '/').replace(/\/+$/, '');
+    return normalized === '' ? '/' : normalized;
+  }
   p = convertToWindowsPath(p);
   if (p.startsWith('\\')) {
     let uncPath = p.replace(/^\\{2,}/, '\\\\');
