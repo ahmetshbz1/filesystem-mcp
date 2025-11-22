@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getValidRootDirectories } from '../roots-utils.js';
+import { getValidRootDirectories } from '../src/roots-utils.js';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -48,7 +48,7 @@ describe('getValidRootDirectories', () => {
     it('should normalize complex paths', async () => {
       const subDir = join(testDir1, 'subdir');
       mkdirSync(subDir);
-      
+
       const roots = [
         { uri: `file://${testDir1}/./subdir/../subdir`, name: 'Complex Path' }
       ];

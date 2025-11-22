@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-import { normalizePath } from './path-utils.js';
+import { normalizePath } from './utils/path-utils.js';
 import { logger } from './logger.js';
 /**
  * Converts a root URI to a normalized directory path with basic security validation.

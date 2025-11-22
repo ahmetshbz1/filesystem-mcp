@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'fs/promises';
-import { handlers } from '../handlers/compare.js';
-import { setAllowedDirectories } from '../lib.js';
+import { handlers } from '../src/handlers/compare.js';
+import { setAllowedDirectories } from '../src/lib.js';
 
 // Mock fs and logger
 vi.mock('fs/promises');
-vi.mock('../logger.js', () => ({
+vi.mock('../src/logger.js', () => ({
   logger: {
     info: vi.fn(),
     error: vi.fn(),
@@ -24,7 +24,7 @@ describe('file_compare', () => {
     const mockContent = 'line1\nline2\nline3';
     (fs.readFile as any).mockResolvedValue(mockContent);
 
-    const result = await handlers.file_compare({ path1: '/tmp/file1.txt', path2: '/tmp/file2.txt' });
+    const result = await handlers.compare({ type: 'text', path1: '/tmp/file1.txt', path2: '/tmp/file2.txt' });
 
     expect(result.content[0].text).toContain('Index: /tmp/file1.txt');
     expect(result.content[0].text).toContain('original');
@@ -40,13 +40,17 @@ describe('file_compare', () => {
       throw new Error('File not found');
     });
 
-    const result = await handlers.file_compare({ path1: '/tmp/file1.txt', path2: '/tmp/file2.txt' });
+    const result = await handlers.compare({ type: 'text', path1: '/tmp/file1.txt', path2: '/tmp/file2.txt' });
 
     expect(result.content[0].text).toContain('+changed');
     expect(result.content[0].text).toContain('-line2');
   });
 
   it('should throw error for invalid path', async () => {
-    await expect(handlers.file_compare({ path1: '/invalid/path', path2: '/tmp/file2.txt' })).rejects.toThrow('Access denied');
+    await expect(handlers.compare({
+      type: 'text',
+      path1: '/invalid/path',
+      path2: '/tmp/file2.txt'
+    })).rejects.toThrow('Access denied');
   });
 });

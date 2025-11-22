@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'fs/promises';
-import { handlers } from '../handlers/hash.js';
-import { setAllowedDirectories } from '../lib.js';
+import { handlers } from '../src/handlers/utility.js';
+import { setAllowedDirectories } from '../src/lib.js';
 
 // Mock fs
 vi.mock('fs/promises');
@@ -21,16 +21,16 @@ describe('file_hash', () => {
   it('should calculate SHA256 hash by default', async () => {
     mockFs.readFile.mockResolvedValue('test content');
 
-    const result = await handlers.file_hash({ path: '/tmp/file.txt' });
+    const result = await handlers.utility({ operation: 'hash', path: '/tmp/file.txt' });
 
-    expect(result.content[0].text).toMatch(/^SHA256: [a-f0-9]{64}$/);
+    expect(result.content[0].text).toMatch(/^sha256: [a-f0-9]{64}$/);
   });
 
   it('should calculate MD5 hash', async () => {
     mockFs.readFile.mockResolvedValue('test content');
 
-    const result = await handlers.file_hash({ path: '/tmp/file.txt', algorithm: 'md5' });
+    const result = await handlers.utility({ operation: 'hash', path: '/tmp/file.txt', algorithm: 'md5' });
 
-    expect(result.content[0].text).toMatch(/^MD5: [a-f0-9]{32}$/);
+    expect(result.content[0].text).toMatch(/^md5: [a-f0-9]{32}$/);
   });
 });

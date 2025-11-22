@@ -20,7 +20,7 @@ export function normalizePath(p) {
         return normalized === '' ? '/' : normalized;
     }
     p = convertToWindowsPath(p);
-    if (p.startsWith('\\')) {
+    if (p.startsWith('\\\\')) {
         let uncPath = p.replace(/^\\{2,}/, '\\\\');
         const restOfPath = uncPath.substring(2).replace(/\\\\/g, '\\');
         p = '\\\\' + restOfPath;

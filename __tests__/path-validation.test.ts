@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
-import { isPathWithinAllowedDirectories } from '../path-validation.js';
+import { isPathWithinAllowedDirectories } from '../src/path-validation.js';
 
 /**
  * Check if the current environment supports symlink creation
@@ -12,10 +12,10 @@ async function checkSymlinkSupport(): Promise<boolean> {
   try {
     const targetFile = path.join(testDir, 'target.txt');
     const linkFile = path.join(testDir, 'link.txt');
-    
+
     await fs.writeFile(targetFile, 'test');
     await fs.symlink(targetFile, linkFile);
-    
+
     // If we get here, symlinks are supported
     return true;
   } catch (error) {

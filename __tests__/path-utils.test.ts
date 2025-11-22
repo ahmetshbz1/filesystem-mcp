@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { normalizePath, expandHome, convertToWindowsPath } from '../path-utils.js';
+import { normalizePath, convertToWindowsPath, expandHome } from '../src/utils/path-utils.js';
 
 describe('Path Utilities', () => {
   describe('convertToWindowsPath', () => {
@@ -189,7 +189,7 @@ describe('Path Utilities', () => {
       // UNC paths should preserve the leading double backslash
       const uncPath = '\\\\SERVER\\share\\folder';
       expect(normalizePath(uncPath)).toBe('\\\\SERVER\\share\\folder');
-      
+
       // Test UNC path with double backslashes that need normalization
       const uncPathWithDoubles = '\\\\\\\\SERVER\\\\share\\\\folder';
       expect(normalizePath(uncPathWithDoubles)).toBe('\\\\SERVER\\share\\folder');
